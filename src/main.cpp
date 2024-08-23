@@ -23,12 +23,15 @@ int main() {
     }
 
 
+    //adds data from the file to vector until eof is reached
     while(bootRom.read(reinterpret_cast<char*>(&byte), sizeof(byte))) {
         bootRomData.push_back(byte);
     }
 
     bootRom.close();
 
+
+    //displays data from the boot ROM
     for(std::size_t i = 0; i < bootRomData.size(); i++) {
         std::cout << bootRomData[i] << std::endl;
     }

@@ -1,1 +1,4 @@
 ROMS/*.bin
+*.exe
+*.out
+*.bin
