@@ -10,3 +10,4 @@ uint8_t Memory::read(uint16_t loc) {
 void Memory::write(uint16_t loc, uint8_t val) {
     ram[loc] = val;
 }
+

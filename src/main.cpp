@@ -3,7 +3,7 @@
 #include <fstream>
 #include <vector>
 #include <cstdint>
-
+#include "cpu.cpp"
 
 int main() {
 
