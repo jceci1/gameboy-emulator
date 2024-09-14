@@ -16,6 +16,26 @@ class CPU {
 
         int cycles;
 
+        //private helper functions
+        void ADD(uint8_t value);
+        void ADC(uint8_t value);
+        void SUB(uint8_t value);
+        void SBC(uint8_t value);
+        void AND(uint8_t value);
+        void XOR(uint8_t value);
+        void OR(uint8_t value);
+        void CP(uint8_t value);  
+        void RLC(uint8_t& reg);
+        void RRC(uint8_t& reg);
+        void RL(uint8_t& reg);
+        void RR(uint8_t& reg);
+        void SLA(uint8_t& reg);
+        void SRA(uint8_t& reg);    
+        void SWAP(uint8_t& reg);
+        void SRL(uint8_t& reg);
+        void BIT(uint8_t bit, uint8_t reg);
+
+
 
     public:
         //constructor
@@ -23,7 +43,9 @@ class CPU {
 
         uint8_t getByte();
         void executeInstruction(uint8_t opcode);
+        void executePrefixedInstruction();
         void nextInstruction();
+        
 
 };
 
