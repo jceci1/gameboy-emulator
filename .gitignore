@@ -1,4 +1,6 @@
-ROMS/*.bin
+/ROMS/
+/build/
+/vscode/
 *.exe
 *.out
 *.bin

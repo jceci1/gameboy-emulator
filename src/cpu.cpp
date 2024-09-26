@@ -10,7 +10,7 @@
 #include "cpu.h"
 
 //constructor
-CPU::CPU() {
+CPU::CPU(Memory& memory) : ram(memory){
     A = 0;
     B = 0;
     C = 0;
@@ -19,7 +19,7 @@ CPU::CPU() {
     H = 0;
     L = 0;
     F = 0;
-    PC = 0x0100;
+    PC = 0x0000;
     SP = 0xFFFE;
     AF = 0;
     BC = 0;
@@ -29,26 +29,56 @@ CPU::CPU() {
 }
 
 
+int CPU::step() {
+    if (halted) {
+        cycles = 4;
+        if (ram.read(0xFF0F) & ram.read(0xFFFF) & 0x1F) {
+            halted = false;
+        }
+    } else {
+        handleInterrupts();
+        nextInstruction();
+    }
+
+    int cyclesConsumed = cycles;
+    cycles = 0;
+    return cyclesConsumed;
+}
+
 uint8_t CPU::getByte() {
-    //FIX: There may be a problem here where incrementing PC by doing "PC++" does not give the desired result.
     return ram.read(PC++);
 }
 
 
-
 void CPU::nextInstruction() {
-    uint8_t opcode = getByte();
+    uint8_t opcode;
+    if (haltBug) {
+        opcode = 0x00; //NOP
+        haltBug = false;
+    } else {
+        opcode = getByte();
+    }
+
     executeInstruction(opcode);
 }
 
 
 
 void CPU::executeInstruction(uint8_t opcode) {
+    uint8_t originalB, originalD, originalA, originalH, originalL;
+    uint8_t msb, lsb, carry, value, original;
+    uint16_t loc, address, correction;
+    uint32_t result;
+    int8_t offset;
+
     switch(opcode) {
         //NOP
         case 0x00:
-            cycles += 4;
+        {
+            cycles += 2;
+            cycles += 2;
             break;
+        }
 
         //LD BC, u16
         case 0x01:
@@ -103,7 +133,8 @@ void CPU::executeInstruction(uint8_t opcode) {
         
         //DEC B
         case 0x05:
-            uint8_t originalB = B;
+           
+            originalB = B;
             B--;
                 
             //accounts for zero flag
@@ -122,7 +153,7 @@ void CPU::executeInstruction(uint8_t opcode) {
             } else {
                 CLEAR_FLAG(FLAG_H);
             }
-
+            
             cycles += 4;
             break;
 
@@ -136,7 +167,7 @@ void CPU::executeInstruction(uint8_t opcode) {
         //RLCA
         case 0x07:
             //extracts most significant bit
-            uint8_t msb = (A & 0x80) >> 7;
+            msb = (A & 0x80) >> 7;
             
             //performs rotation on A
             A = (A << 1) | msb;
@@ -159,7 +190,7 @@ void CPU::executeInstruction(uint8_t opcode) {
         //LD (u16), SP
         case 0x08:
             //gets the 16-bit address from the next two bytes in memory
-            uint16_t loc = getByte() | (getByte() << 8);
+            loc = getByte() | (getByte() << 8);
 
             //Writes the value of SP to the two memory locations specified 
             ram.write(loc, SP & 0xFF);
@@ -171,7 +202,7 @@ void CPU::executeInstruction(uint8_t opcode) {
         //ADD HL, BC 
         case 0x09: 
             //adds together the result
-            uint32_t result = HL + BC;
+            result = HL + BC;
             
             //unsets all flags that will be modified
             F &= ~(FLAG_N | FLAG_H | FLAG_C);
@@ -204,35 +235,34 @@ void CPU::executeInstruction(uint8_t opcode) {
     
         //INC C
         case 0x0C:
-            //update registers
+            //updates registers
             C++;
-            BC = (B << 8) | C;
-            
-            //clear all affected flags
-            F &= ~((1 << FLAG_N) | (1 << FLAG_Z) | (1 << FLAG_H));
-            
+            BC = (uint16_t)((B << 8) | C);
+    
+            //clears all affected flags
+            F &= ~(FLAG_N | FLAG_Z | FLAG_H);
+    
             //sets flags
-            if (C == 0) F |= (1 << FLAG_Z);
-            if ((C & 0x0F) == 0) F |= (1 << FLAG_H);
-
+            if (C == 0) F |= FLAG_Z;
+            if ((C & 0x0F) == 0) F |= FLAG_H;
 
             cycles += 4;
             break;
-        
+
         //DEC C
         case 0x0D: 
-                //updates registers
-                C--;
-                BC = (B << 8) | C; 
-                
-                //sets necessary flags
-                F |= (1 << FLAG_N);
-                F &= ~((1 << FLAG_Z) | (1 << FLAG_H));
-                if (C == 0) F |= (1 << FLAG_Z);
-                if ((C & 0x0F) == 0x0F) F |= (1 << FLAG_H);
-                
-                cycles += 4;
-                break;
+            //updates registers
+            C--;
+            BC = (uint16_t)((B << 8) | C);
+    
+            //sets necessary flags
+            F |= FLAG_N;
+            F &= ~(FLAG_Z | FLAG_H);
+            if (C == 0) F |= FLAG_Z;
+            if ((C & 0x0F) == 0x0F) F |= FLAG_H;
+    
+            cycles += 4;
+            break;
 
         //LD C, u8
         case 0x0E: 
@@ -248,7 +278,7 @@ void CPU::executeInstruction(uint8_t opcode) {
         //RRCA
         case 0x0F:
             //holds carry bit
-            uint8_t carry = A & 0x01;
+            carry = A & 0x01;
             
             //sets registers
             A = (A >> 1) | (carry << 7);
@@ -264,9 +294,22 @@ void CPU::executeInstruction(uint8_t opcode) {
     
         //STOP
         case 0x10:
-            //STOP instruction implementation
-            //FIX: This might require additional system-level handling
-            cycles += 4;
+            {
+                uint8_t joypadState = ram.read(0xFF00);
+                std::cout << "STOP instruction executed at PC: 0x" << std::hex << PC << std::dec << std::endl;
+                std::cout << "Joypad state: 0x" << std::hex << static_cast<int>(joypadState) << std::dec << std::endl;
+                std::cout << "LCDC value: 0x" << std::hex << static_cast<int>(ram.read(0xFF40)) << std::dec << std::endl;
+        
+                if (joypadState & 0x30) {
+                    std::cout << "Entering STOP mode" << std::endl;
+                    stopped = true;
+                    ram.write(0xFF04, 0); //reset DIV register
+                } else {
+                    std::cout << "STOP instruction ignored due to joypad state" << std::endl;
+                }
+                PC++; //STOP is a 2-byte instruction
+                cycles += 4;
+            }
             break;
 
         //LD DE, u16
@@ -322,7 +365,7 @@ void CPU::executeInstruction(uint8_t opcode) {
         
         //DEC D
         case 0x15:
-            uint8_t originalD = D;
+            originalD = D;
             D--;
                 
             //accounts for zero flag
@@ -354,10 +397,10 @@ void CPU::executeInstruction(uint8_t opcode) {
         //RLA
         case 0x17:
             //extracts carry flag
-            uint8_t carry = (F & 0x10) >> 4;
+            carry = (F & 0x10) >> 4;
             
             //extracts most significant bit
-            uint8_t msb = (A & 0x80) >> 7;
+            msb = (A & 0x80) >> 7;
             
             //performs rotation on A
             A = (A << 1) | carry;
@@ -380,7 +423,7 @@ void CPU::executeInstruction(uint8_t opcode) {
         //JR i8
         case 0x18:
             //gets the signed 8-bit offset
-            int8_t offset = static_cast<int8_t>(getByte());
+            offset = static_cast<int8_t>(getByte());
 
             //adds the offset to PC
             PC += offset;
@@ -391,7 +434,7 @@ void CPU::executeInstruction(uint8_t opcode) {
         //ADD HL, DE 
         case 0x19: 
             //adds together the result
-            uint32_t result = HL + DE;
+            result = HL + DE;
             
             //unsets all flags that will be modified
             F &= ~(FLAG_N | FLAG_H | FLAG_C);
@@ -426,30 +469,30 @@ void CPU::executeInstruction(uint8_t opcode) {
         case 0x1C:
             //updates registers
             E++;
-            DE = (D << 8) | E;
-            
+            DE = (uint16_t)((D << 8) | E);
+    
             //clear all affected flags
-            F &= ~((1 << FLAG_N) | (1 << FLAG_Z) | (1 << FLAG_H));
-            
+            F &= ~(FLAG_N | FLAG_Z | FLAG_H);
+    
             //sets flags
-            if (E == 0) F |= (1 << FLAG_Z);
-            if ((E & 0x0F) == 0) F |= (1 << FLAG_H);
+            if (E == 0) F |= FLAG_Z;
+            if ((E & 0x0F) == 0) F |= FLAG_H;
 
             cycles += 4;
             break;
-        
+
         //DEC E
         case 0x1D: 
             //updates registers
             E--;
-            DE = (D << 8) | E; 
-            
+            DE = (uint16_t)((D << 8) | E);
+    
             //sets necessary flags
-            F |= (1 << FLAG_N);
-            F &= ~((1 << FLAG_Z) | (1 << FLAG_H));
-            if (E == 0) F |= (1 << FLAG_Z);
-            if ((E & 0x0F) == 0x0F) F |= (1 << FLAG_H);
-            
+            F |= FLAG_N;
+            F &= ~(FLAG_Z | FLAG_H);
+            if (E == 0) F |= FLAG_Z;
+            if ((E & 0x0F) == 0x0F) F |= FLAG_H;
+    
             cycles += 4;
             break;
 
@@ -467,10 +510,10 @@ void CPU::executeInstruction(uint8_t opcode) {
         //RRA
         case 0x1F:
             //extracts carry flag
-            uint8_t carry = (F & 0x10) >> 4;
+            carry = (F & 0x10) >> 4;
             
             //holds least significant bit
-            uint8_t lsb = A & 0x01;
+            lsb = A & 0x01;
             
             //sets registers
             A = (A >> 1) | (carry << 7);
@@ -487,10 +530,10 @@ void CPU::executeInstruction(uint8_t opcode) {
         
         //JR NZ, i8
         case 0x20:
-            
             //holds the offset to jump by
-            int8_t offset = static_cast<int8_t>(getByte());
+            offset = static_cast<int8_t>(getByte());
             
+
             //checks jump condition
             if (!IS_FLAG_SET(FLAG_Z)) {
                 PC += offset;
@@ -556,7 +599,7 @@ void CPU::executeInstruction(uint8_t opcode) {
         //DEC H
         case 0x25:
             {
-                uint8_t originalH = H;
+                originalH = H;
                 H--;
                 
                 //accounts for zero flag
@@ -590,7 +633,7 @@ void CPU::executeInstruction(uint8_t opcode) {
         //DAA
         case 0x27:
             
-            uint16_t correction = 0;
+            correction = 0;
 
             //checks half carry flag
             if (IS_FLAG_SET(FLAG_H) || (A & 0x0F) > 9) {
@@ -617,9 +660,9 @@ void CPU::executeInstruction(uint8_t opcode) {
 
         //JR Z, i8
         case 0x28:
-        
+            //FIX
             //holds offset to be jumped by
-            int8_t offset = static_cast<int8_t>(getByte());
+            offset = static_cast<int8_t>(getByte());
             
             //checks zero flag
             if (IS_FLAG_SET(FLAG_Z)) {
@@ -634,7 +677,7 @@ void CPU::executeInstruction(uint8_t opcode) {
         //ADD HL, HL
         case 0x29:
             
-            uint32_t result = HL + HL;
+            result = HL + HL;
  
             CLEAR_FLAG(FLAG_N);
                 
@@ -699,7 +742,7 @@ void CPU::executeInstruction(uint8_t opcode) {
         //DEC L
         case 0x2D:
             {
-                uint8_t originalL = L;
+                originalL = L;
                 L--;
                 
                 //accounts for zero flag
@@ -743,9 +786,9 @@ void CPU::executeInstruction(uint8_t opcode) {
         
         //JR NC, i8
         case 0x30:
-            
+            //FIX
             //read the signed 8-bit offset
-            int8_t offset = static_cast<int8_t>(getByte());
+            offset = static_cast<int8_t>(getByte());
                 
             //check if carry flag is not set
             if (!IS_FLAG_SET(FLAG_C)) {
@@ -784,7 +827,7 @@ void CPU::executeInstruction(uint8_t opcode) {
         case 0x34:
             
             //read value from memory address pointed by HL
-            uint8_t value = ram.read(HL);
+            value = ram.read(HL);
             value++;
 
             //write incremented value back to memory
@@ -811,8 +854,8 @@ void CPU::executeInstruction(uint8_t opcode) {
         case 0x35:
             
             //read value from memory address pointed by HL
-            uint8_t value = ram.read(HL);
-            uint8_t original = value;
+            value = ram.read(HL);
+            original = value;
             value--;
 
             //write decremented value back to memory
@@ -853,9 +896,9 @@ void CPU::executeInstruction(uint8_t opcode) {
 
         //JR C, i8
         case 0x38:
-            
+            //FIX
             //read the signed 8-bit offset
-            int8_t offset = static_cast<int8_t>(getByte());
+            offset = static_cast<int8_t>(getByte());
                 
             //check if carry flag is set
             if (IS_FLAG_SET(FLAG_C)) {
@@ -872,7 +915,7 @@ void CPU::executeInstruction(uint8_t opcode) {
         //ADD HL, SP
         case 0x39:
             //perform 16-bit addition
-            uint32_t result = HL + SP;
+            result = HL + SP;
                 
             CLEAR_FLAG(FLAG_N);
                 
@@ -934,7 +977,7 @@ void CPU::executeInstruction(uint8_t opcode) {
         //DEC A
         case 0x3D:
             //holds A and increments
-            uint8_t originalA = A;
+            originalA = A;
             A--;
                 
             //update flags
@@ -1314,8 +1357,11 @@ void CPU::executeInstruction(uint8_t opcode) {
 
         //HALT
         case 0x76:
-            //FIX: Implement HALT functionality
-            //this can actually last forever
+            if (!IME && (IE & IF & 0x1F)) {
+                haltBug = true;
+            } else {
+                halted = true;
+            }
             cycles += 4;
             break;
 
@@ -1781,7 +1827,7 @@ void CPU::executeInstruction(uint8_t opcode) {
         //JP NZ, u16
         case 0xC2:
             
-            uint16_t address = getByte() | (getByte() << 8);
+            address = getByte() | (getByte() << 8);
             if (!IS_FLAG_SET(FLAG_Z)) {
                 PC = address;
                 cycles += 16;
@@ -1800,7 +1846,7 @@ void CPU::executeInstruction(uint8_t opcode) {
         //CALL NZ, u16
         case 0xC4:
             
-            uint16_t address = getByte() | (getByte() << 8);
+            address = getByte() | (getByte() << 8);
             if (!IS_FLAG_SET(FLAG_Z)) {
                 SP -= 2;
                 ram.write(SP, PC & 0xFF);
@@ -1857,7 +1903,7 @@ void CPU::executeInstruction(uint8_t opcode) {
         //JP Z, u16
         case 0xCA:
             
-            uint16_t address = getByte() | (getByte() << 8);
+            address = getByte() | (getByte() << 8);
             if (IS_FLAG_SET(FLAG_Z)) {
                 PC = address;
                 cycles += 16;
@@ -1875,7 +1921,7 @@ void CPU::executeInstruction(uint8_t opcode) {
         //CALL Z, u16
         case 0xCC:
             
-            uint16_t address = getByte() | (getByte() << 8);
+            address = getByte() | (getByte() << 8);
             if (IS_FLAG_SET(FLAG_Z)) {
                 SP -= 2;
                 ram.write(SP, PC & 0xFF);
@@ -1891,7 +1937,7 @@ void CPU::executeInstruction(uint8_t opcode) {
         //CALL u16
         case 0xCD:
             
-            uint16_t address = getByte() | (getByte() << 8);
+            address = getByte() | (getByte() << 8);
             SP -= 2;
             ram.write(SP, PC & 0xFF);
             ram.write(SP + 1, PC >> 8);
@@ -1936,7 +1982,7 @@ void CPU::executeInstruction(uint8_t opcode) {
         //JP NC, u16
         case 0xD2:
             
-            uint16_t address = getByte() | (getByte() << 8);
+            address = getByte() | (getByte() << 8);
             if (!IS_FLAG_SET(FLAG_C)) {
                 PC = address;
                 cycles += 16;
@@ -1949,7 +1995,7 @@ void CPU::executeInstruction(uint8_t opcode) {
         //CALL NC, u16
         case 0xD4:
             
-            uint16_t address = getByte() | (getByte() << 8);
+            address = getByte() | (getByte() << 8);
             if (!IS_FLAG_SET(FLAG_C)) {
                 SP -= 2;
                 ram.write(SP, PC & 0xFF);
@@ -2000,15 +2046,13 @@ void CPU::executeInstruction(uint8_t opcode) {
         case 0xD9:
             PC = (ram.read(SP + 1) << 8) | ram.read(SP);
             SP += 2;
-            // Enable interrupts
-            // FIX: Implement interrupt handling
             cycles += 16;
             break;
 
         //JP C, u16
         case 0xDA:
             
-            uint16_t address = getByte() | (getByte() << 8);
+            address = getByte() | (getByte() << 8);
             if (IS_FLAG_SET(FLAG_C)) {
                 PC = address;
                 cycles += 16;
@@ -2021,7 +2065,7 @@ void CPU::executeInstruction(uint8_t opcode) {
         //CALL C, u16
         case 0xDC:
             
-            uint16_t address = getByte() | (getByte() << 8);
+            address = getByte() | (getByte() << 8);
             if (IS_FLAG_SET(FLAG_C)) {
                 SP -= 2;
                 ram.write(SP, PC & 0xFF);
@@ -2052,7 +2096,7 @@ void CPU::executeInstruction(uint8_t opcode) {
         //LD (FF00+u8), A
         case 0xE0:
             
-            uint8_t offset = getByte();
+            offset = getByte();
             ram.write(0xFF00 + offset, A);
             cycles += 12;
             
@@ -2097,8 +2141,8 @@ void CPU::executeInstruction(uint8_t opcode) {
         //ADD SP, i8
         case 0xE8:
             
-            int8_t offset = static_cast<int8_t>(getByte());
-            uint32_t result = SP + offset;
+            offset = static_cast<int8_t>(getByte());
+            result = SP + offset;
             CLEAR_FLAG(FLAG_Z);
             CLEAR_FLAG(FLAG_N);
             ((SP & 0xFF) + (offset & 0xFF) > 0xFF) ? SET_FLAG(FLAG_C) : CLEAR_FLAG(FLAG_C);
@@ -2117,7 +2161,7 @@ void CPU::executeInstruction(uint8_t opcode) {
         //LD (u16), A
         case 0xEA:
             
-            uint16_t address = getByte() | (getByte() << 8);
+            address = getByte() | (getByte() << 8);
             ram.write(address, A);
             cycles += 16;
             
@@ -2141,7 +2185,7 @@ void CPU::executeInstruction(uint8_t opcode) {
         //LD A, (FF00+u8)
         case 0xF0:
             
-            uint8_t offset = getByte();
+            offset = getByte();
             A = ram.read(0xFF00 + offset);
             cycles += 12;
             
@@ -2149,7 +2193,7 @@ void CPU::executeInstruction(uint8_t opcode) {
 
         //POP AF
         case 0xF1:
-            F = ram.read(SP++) & 0xF0;  // Lower 4 bits of F are always 0
+            F = ram.read(SP++) & 0xF0;  //lower 4 bits of F are always 0
             A = ram.read(SP++);
             cycles += 12;
             break;
@@ -2162,8 +2206,8 @@ void CPU::executeInstruction(uint8_t opcode) {
 
         //DI
         case 0xF3:
-            // Disable interrupts
-            // FIX: Implement interrupt handling
+            IME = false;
+            interruptsEnabled = false;
             cycles += 4;
             break;
 
@@ -2192,9 +2236,8 @@ void CPU::executeInstruction(uint8_t opcode) {
 
         //LD HL, SP+i8
         case 0xF8:
-            
-            int8_t offset = static_cast<int8_t>(getByte());
-            uint32_t result = SP + offset;
+            offset = static_cast<int8_t>(getByte());
+            result = SP + offset;
             CLEAR_FLAG(FLAG_Z);
             CLEAR_FLAG(FLAG_N);
             ((SP & 0xFF) + (offset & 0xFF) > 0xFF) ? SET_FLAG(FLAG_C) : CLEAR_FLAG(FLAG_C);
@@ -2213,7 +2256,7 @@ void CPU::executeInstruction(uint8_t opcode) {
         //LD A, (u16)
         case 0xFA:
             
-            uint16_t address = getByte() | (getByte() << 8);
+            address = getByte() | (getByte() << 8);
             A = ram.read(address);
             cycles += 16;
             
@@ -2221,8 +2264,7 @@ void CPU::executeInstruction(uint8_t opcode) {
 
         //EI
         case 0xFB:
-            // Enable interrupts
-            // FIX: Implement interrupt handling
+            interruptsEnabled = true;
             cycles += 4;
             break;
 
@@ -2246,6 +2288,7 @@ void CPU::executeInstruction(uint8_t opcode) {
 
 
 void CPU::executePrefixedInstruction() {
+    uint8_t value;
     uint8_t opcode = getByte();
     switch(opcode) {
         //RLC B
@@ -2287,7 +2330,7 @@ void CPU::executePrefixedInstruction() {
         //RLC (HL)
         case 0x06:
             
-            uint8_t value = ram.read(HL);
+            value = ram.read(HL);
             RLC(value);
             ram.write(HL, value);
             cycles += 16;
@@ -2339,7 +2382,7 @@ void CPU::executePrefixedInstruction() {
         //RRC (HL)
         case 0x0E:
             
-            uint8_t value = ram.read(HL);
+            value = ram.read(HL);
             RRC(value);
             ram.write(HL, value);
             cycles += 16;
@@ -2391,7 +2434,7 @@ void CPU::executePrefixedInstruction() {
         //RL (HL)
         case 0x16:
             
-            uint8_t value = ram.read(HL);
+            value = ram.read(HL);
             RL(value);
             ram.write(HL, value);
             cycles += 16;
@@ -2443,7 +2486,7 @@ void CPU::executePrefixedInstruction() {
         //RR (HL)
         case 0x1E:
             
-            uint8_t value = ram.read(HL);
+            value = ram.read(HL);
             RR(value);
             ram.write(HL, value);
             cycles += 16;
@@ -2495,7 +2538,7 @@ void CPU::executePrefixedInstruction() {
         //SLA (HL)
         case 0x26:
             
-            uint8_t value = ram.read(HL);
+            value = ram.read(HL);
             SLA(value);
             ram.write(HL, value);
             cycles += 16;
@@ -2547,7 +2590,7 @@ void CPU::executePrefixedInstruction() {
         //SRA (HL)
         case 0x2E:
             
-            uint8_t value = ram.read(HL);
+            value = ram.read(HL);
             SRA(value);
             ram.write(HL, value);
             cycles += 16;
@@ -2599,7 +2642,7 @@ void CPU::executePrefixedInstruction() {
         //swap (hl)
         case 0x36:
             
-            uint8_t value = ram.read(HL);
+            value = ram.read(HL);
             SWAP(value);
             ram.write(HL, value);
             cycles += 16;
@@ -2651,7 +2694,7 @@ void CPU::executePrefixedInstruction() {
         //srl (hl)
         case 0x3E:
             
-            uint8_t value = ram.read(HL);
+            value = ram.read(HL);
             SRL(value);
             ram.write(HL, value);
             cycles += 16;
@@ -2951,9 +2994,6 @@ void CPU::executePrefixedInstruction() {
             BIT(5, A);
             cycles += 8;
             break;
-
-        switch(opcode) {
-        // ... (previous cases)
 
         //bit 6,b
         case 0x70:
@@ -3825,6 +3865,50 @@ void CPU::executePrefixedInstruction() {
 
 
 
+void CPU::handleInterrupts() {
+    //stops if interrupts are disabled
+    if (!IME)
+        return;
+
+    //checks which interrupts are both enabled and flagged
+    uint8_t fired = IE & IF;
+
+    //stops if not interrupts are being used
+    if(!fired)
+        return;
+
+        
+    IME = false;
+
+    if (fired & 0x01) { //VBlank
+        IF &= ~0x01;
+        executeInterrupt(0x0040);
+    } else if (fired & 0x02) { //LCD STAT
+        IF &= ~0x02;
+        executeInterrupt(0x0048);
+    } else if (fired & 0x04) { //timer
+        IF &= ~0x04;
+        executeInterrupt(0x0050);
+    } else if (fired & 0x08) { //serial
+        IF &= ~0x08;
+        executeInterrupt(0x0058);
+    } else if (fired & 0x10) { //joypad
+        IF &= ~0x10;
+        executeInterrupt(0x0060);
+    }
+}
+
+
+void CPU::executeInterrupt(uint16_t address) {
+    SP -= 2;
+    ram.write(SP, PC & 0xFF);        //writes low byte
+    ram.write(SP + 1, (PC >> 8) & 0xFF);  //writes high byte
+    PC = address;
+    cycles += 20; 
+}
+
+
+
 //helper functions
 void CPU::ADD(uint8_t value) {
     uint16_t result = A + value;
@@ -3838,6 +3922,7 @@ void CPU::ADD(uint8_t value) {
     A = result & 0xFF;
     (A == 0) ? SET_FLAG(FLAG_Z) : CLEAR_FLAG(FLAG_Z);
 }
+
 
 void CPU::ADC(uint8_t value) {
     uint16_t result = A + value + (F & FLAG_C ? 1 : 0);
