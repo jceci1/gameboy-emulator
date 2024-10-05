@@ -149,6 +149,15 @@ void GameBoy::run() {
     SDL_Quit();
 }
 
+
+void testRun(int errorCode) {
+    int i = 0;
+    while(i < errorCode) {
+        cout << i << endl;
+    }
+    //TODO: Attach to SDL2 tester and implement error code handling
+}
+
 //runs a single frame of the gameboy emulation
 void GameBoy::runFrame() {
     cyclesThisFrame = 0;
