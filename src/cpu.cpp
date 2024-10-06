@@ -157,242 +157,219 @@ void CPU::executeInstruction(uint8_t opcode) {
             cycles += 4;
             break;
 
-        //LD B, u8
-        case 0x06:
-            B = getByte();
-            cycles += 8;
-            break;
+       //LD B, u8
+case 0x06:
+    B = fetchByte();
+    cycles += 8;
+    break;
 
-        
-        //RLCA
-        case 0x07:
-            //extracts most significant bit
-            msb = (A & 0x80) >> 7;
-            
-            //performs rotation on A
-            A = (A << 1) | msb;
-            
-            //handles carry flag
-            if (msb) {
-                F |= 0x10;
-            } else {
-                F &= ~0x10;
-            }
-            
-            //unsets zero, negative, and half-carry flag
-            F &= ~0x20;
-            F &= ~0x40;
-            F &= ~0x80;
-            
-            cycles += 4;
-            break;
+//RLCA
+case 0x07:
+    //extracts most significant bit
+    msb = (A >> 7) & 0x01;
 
-        //LD (u16), SP
-        case 0x08:
-            //gets the 16-bit address from the next two bytes in memory
-            loc = getByte() | (getByte() << 8);
+    //performs rotation on A
+    A = (A << 1) | msb;
 
-            //Writes the value of SP to the two memory locations specified 
-            ram.write(loc, SP & 0xFF);
-            ram.write(loc + 1, (SP >> 8) & 0xFF);
+    //handles carry flag
+    F = (msb) ? (F | 0x10) : (F & ~0x10);
 
-            cycles += 20;
-            break;
+    //unsets zero, negative, and half-carry flag
+    F &= ~(0x20 | 0x40 | 0x80);
 
-        //ADD HL, BC 
-        case 0x09: 
-            //adds together the result
-            result = HL + BC;
-            
-            //unsets all flags that will be modified
-            F &= ~(FLAG_N | FLAG_H | FLAG_C);
-            
-            //sets half carry and carry flag if necessary
-            if ((HL & 0xFFF) + (BC & 0xFFF) > 0xFFF) F |= FLAG_H;
-            if (result > 0xFFFF) F |= FLAG_C;
-            
-            //sets L and H registers
-            L = result & 0xFF;
-            H = (result >> 8) & 0xFF;
-            cycles += 8;
-            break;
+    cycles += 4;
+    break;
+
+//LD (u16), SP
+case 0x08:
+    //gets the 16-bit address from the next two bytes in memory
+    loc = fetchByte() | (fetchByte() << 8);
+
+    //Writes the value of SP to the two memory locations specified 
+    ram.write(loc, SP & 0xFF);
+    ram.write(loc + 1, SP >> 8);
+
+    cycles += 20;
+    break;
+
+//ADD HL, BC 
+case 0x09:
+    //adds together the result
+    result = HL + BC;
+
+    //unsets all flags that will be modified
+    F &= ~(FLAG_N | FLAG_H | FLAG_C);
+
+    //sets half carry and carry flag if necessary
+    if ((HL & 0xFFF) + (BC & 0xFFF) > 0xFFF) F |= FLAG_H;
+    if (result < HL) F |= FLAG_C;
+
+    //sets L and H registers
+    L = result & 0xFF;
+    H = result >> 8;
+    cycles += 8;
+    break;
+
+//LD A, (BC)
+case 0x0A:
+    A = ram.read(BC);
+    cycles += 8;
+    break;
+
+//DEC BC
+case 0x0B:
+    //decrements each affected register
+    BC--;
+    B = (BC >> 8) & 0xFF;
+    C = BC & 0xFF;
+
+    cycles += 8;
+    break;
+
+//INC C
+case 0x0C:
+    //updates registers
+    C++;
+    BC = (B << 8) | C;
+
+    //clears all affected flags
+    F &= ~(FLAG_N | FLAG_Z | FLAG_H);
+
+    //sets flags
+    F |= (C == 0) ? FLAG_Z : 0;
+    F |= ((C & 0x0F) == 0) ? FLAG_H : 0;
+
+    cycles += 4;
+    break;
+
+//DEC C
+case 0x0D:
+    //updates registers
+    C--;
+    BC = (B << 8) | C;
+
+    //sets necessary flags
+    F |= FLAG_N;
+    F &= ~(FLAG_Z | FLAG_H);
+    F |= (C == 0) ? FLAG_Z : 0;
+    F |= ((C & 0x0F) == 0x0F) ? FLAG_H : 0;
+
+    cycles += 4;
+    break;
+
+//LD C, u8
+case 0x0E:
+    //reads memory into C
+    C = fetchByte();
     
-        //LD A, (BC)
-        case 0x0A: 
-            A = ram.read(BC);
-            cycles += 8;
-            break;
-    
-        //DEC BC
-        case 0x0B:
-            //decrements each affected register
-            C = (BC - 1) & 0xFF;
-            B = (BC - 1) >> 8;
-            BC -= 1;
+    //updates BC
+    BC = (B << 8) | C; 
 
-            cycles += 8;
-            break;
-    
-        //INC C
-        case 0x0C:
-            //updates registers
-            C++;
-            BC = (uint16_t)((B << 8) | C);
-    
-            //clears all affected flags
-            F &= ~(FLAG_N | FLAG_Z | FLAG_H);
-    
-            //sets flags
-            if (C == 0) F |= FLAG_Z;
-            if ((C & 0x0F) == 0) F |= FLAG_H;
+    cycles += 8;
+    break;
 
-            cycles += 4;
-            break;
+//RRCA
+case 0x0F:
+    //holds carry bit
+    carry = A & 0x01;
 
-        //DEC C
-        case 0x0D: 
-            //updates registers
-            C--;
-            BC = (uint16_t)((B << 8) | C);
-    
-            //sets necessary flags
-            F |= FLAG_N;
-            F &= ~(FLAG_Z | FLAG_H);
-            if (C == 0) F |= FLAG_Z;
-            if ((C & 0x0F) == 0x0F) F |= FLAG_H;
-    
-            cycles += 4;
-            break;
+    //sets registers
+    A = (A >> 1) | (carry << 7);
 
-        //LD C, u8
-        case 0x0E: 
-            //reads memory into C
-            C = getByte();
-            
-            //updates BC
-            BC = (B << 8) | C; 
-            
-            cycles += 8;
-            break;
-    
-        //RRCA
-        case 0x0F:
-            //holds carry bit
-            carry = A & 0x01;
-            
-            //sets registers
-            A = (A >> 1) | (carry << 7);
-            
-            //unsets all flags
-            F = 0;
-            
-            //sets carry flag if necessary
-            if (carry) F |= (1 << FLAG_C);
-            
-            cycles += 4;
-            break;
-    
-        //STOP
-        case 0x10:
-            {
-                uint8_t joypadState = ram.read(0xFF00);
-                std::cout << "STOP instruction executed at PC: 0x" << std::hex << PC << std::dec << std::endl;
-                std::cout << "Joypad state: 0x" << std::hex << static_cast<int>(joypadState) << std::dec << std::endl;
-                std::cout << "LCDC value: 0x" << std::hex << static_cast<int>(ram.read(0xFF40)) << std::dec << std::endl;
-        
-                if (joypadState & 0x30) {
-                    std::cout << "Entering STOP mode" << std::endl;
-                    stopped = true;
-                    ram.write(0xFF04, 0); //reset DIV register
-                } else {
-                    std::cout << "STOP instruction ignored due to joypad state" << std::endl;
-                }
-                PC++; //STOP is a 2-byte instruction
-                cycles += 4;
-            }
-            break;
+    //unsets all flags
+    F = 0;
 
-        //LD DE, u16
-        case 0x11:
-            E = getByte();
-            D = getByte();
-            cycles += 12;
-            break;
+    //sets carry flag if necessary
+    F |= (carry) ? (1 << FLAG_C) : 0;
 
-        //LD (DE), A
-        case 0x12:
-            ram.write((D << 8) | E, A);
-            cycles += 8;
-            break;
+    cycles += 4;
+    break;
 
-        //INC DE
-        case 0x13:
-            //uses bitwise operator to combine D and E
-            DE = (D << 8) | E;
-            DE++;
-            
-            //takes high byte
-            D = (DE >> 8) & 0xFF;
-            
-            //takes low byte
-            E = DE & 0xFF;
-            cycles += 8;
-            break;
+//STOP
+case 0x10:
+    {
+        uint8_t joypadState = ram.read(0xFF00);
+        std::cout << "STOP instruction executed at PC: 0x" << std::hex << PC << std::dec << std::endl;
+        std::cout << "Joypad state: 0x" << std::hex << static_cast<int>(joypadState) << std::dec << std::endl;
+        std::cout << "LCDC value: 0x" << std::hex << static_cast<int>(ram.read(0xFF40)) << std::dec << std::endl;
 
-        //INC D
-        case 0x14:
-            D++;
-            
-            //accounts for zero flag
-            if(D == 0) {
-                F |= 0x80;
-            } else {
-                F &= ~0x80;
-            }
+        if (joypadState & 0x30) {
+            std::cout << "Entering STOP mode" << std::endl;
+            stopped = true;
+            ram.write(0xFF04, 0); //reset DIV register
+        } else {
+            std::cout << "STOP instruction ignored due to joypad state" << std::endl;
+        }
+        PC++; //STOP is a 2-byte instruction
+        cycles += 4;
+    }
+    break;
 
-            //clears negative flag
-            F &= ~0x40;
+//LD DE, u16
+case 0x11:
+    E = fetchByte();
+    D = fetchByte();
+    cycles += 12;
+    break;
 
-            //accounts for half carry flag
-            if((D & 0x0F) == 0x00) {
-                F |= 0x20;
-            } else {
-                F &= ~0x20;
-            }
+//LD (DE), A
+case 0x12:
+    ram.write((D << 8) | E, A);
+    cycles += 8;
+    break;
 
-            cycles += 4;
-            break;
-        
-        //DEC D
-        case 0x15:
-            originalD = D;
-            D--;
-                
-            //accounts for zero flag
-            if(D == 0) {
-                SET_FLAG(FLAG_Z);
-            } else {
-                CLEAR_FLAG(FLAG_Z);
-            }
+//INC DE
+case 0x13:
+    //uses bitwise operator to combine D and E
+    DE = (D << 8) | E;
+    DE++;
 
-            //sets negative flag
-            SET_FLAG(FLAG_N);
+    //takes high byte
+    D = (DE >> 8) & 0xFF;
 
-            //accounts for half carry flag
-            if((originalD & 0x0F) == 0x00) {
-                SET_FLAG(FLAG_H);
-            } else {
-                CLEAR_FLAG(FLAG_H);
-            }
+    //takes low byte
+    E = DE & 0xFF;
+    cycles += 8;
+    break;
 
-            cycles += 4;
-            break;
+//INC D
+case 0x14:
+    D++;
 
-        //LD D, u8
-        case 0x16:
-            D = getByte();
-            cycles += 8;
-            break;
+    //accounts for zero flag
+    F |= (D == 0) ? 0x80 : 0;
+
+    //clears negative flag
+    F &= ~0x40;
+
+    //accounts for half carry flag
+    F |= ((D & 0x0F) == 0) ? 0x20 : 0;
+
+    cycles += 4;
+    break;
+
+//DEC D
+case 0x15:
+    originalD = D;
+    D--;
+
+    //accounts for zero flag
+    F |= (D == 0) ? FLAG_Z : 0;
+
+    //sets negative flag
+    F |= FLAG_N;
+
+    //accounts for half carry flag
+    F |= ((originalD & 0x0F) == 0) ? FLAG_H : 0;
+
+    cycles += 4;
+    break;
+
+//LD D, u8
+case 0x16:
+    D = fetchByte();
+    cycles += 8;
+    break;
 
         //RLA
         case 0x17:
